@@ -12,7 +12,7 @@ from dataclasses import asdict
 import logging
 
 from analyize_videos import ClaimInput, analyze_claim
-from analyze_transcript import analyze_transcript, TranscriptResult
+from analyze_transcript import analyze_transcript, TranscriptResult, TRANSCRIPT_SYSTEM_PROMPT
 
 log = logging.getLogger("logiscan.api")
 
@@ -43,6 +43,7 @@ class AnalyzeRequest(BaseModel):
 
 class TranscriptRequest(BaseModel):
     url: str
+    custom_prompt: str = ""
 
 
 @app.get("/api/health")
@@ -50,13 +51,19 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/api/default-prompt")
+def get_default_prompt():
+    return {"prompt": TRANSCRIPT_SYSTEM_PROMPT}
+
+
 @app.post("/api/analyze-transcript")
 def analyze_transcript_endpoint(req: TranscriptRequest):
     url = req.url.strip()
     if not url:
         raise HTTPException(status_code=422, detail="url is required")
+    prompt = req.custom_prompt.strip() or None
     try:
-        result = analyze_transcript(url)
+        result = analyze_transcript(url, custom_prompt=prompt)
         return asdict(result)
     except Exception as e:
         log.exception("analyze_transcript failed")

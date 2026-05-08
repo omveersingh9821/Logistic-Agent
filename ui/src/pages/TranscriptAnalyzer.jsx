@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   MessageSquare, Loader2, ShieldAlert, ChevronDown, ChevronUp,
   Info, AlertTriangle, CheckCircle2, XCircle, Phone, Package,
-  Zap, Link2, AlertCircle, User, Truck, PhoneOff,
-  ArrowRight, Flag, Clock, Mic,
+  Zap, Link2, AlertCircle, User, PhoneOff,
+  ArrowRight, Flag, Clock, Mic, SlidersHorizontal, RotateCcw,
 } from "lucide-react";
 
 const API = import.meta.env.VITE_API_URL || "";
@@ -331,6 +331,18 @@ export default function TranscriptAnalyzer() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [promptOpen, setPromptOpen] = useState(false);
+  const [defaultPrompt, setDefaultPrompt] = useState("");
+  const [customPrompt, setCustomPrompt] = useState("");
+
+  useEffect(() => {
+    fetch(`${API}/api/default-prompt`)
+      .then(r => r.json())
+      .then(d => { setDefaultPrompt(d.prompt); setCustomPrompt(d.prompt); })
+      .catch(() => {});
+  }, []);
+
+  const isModified = customPrompt.trim() !== defaultPrompt.trim();
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -341,7 +353,7 @@ export default function TranscriptAnalyzer() {
       const res = await fetch(`${API}/api/analyze-transcript`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: trimmed }),
+        body: JSON.stringify({ url: trimmed, custom_prompt: customPrompt }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail ?? `Server error ${res.status}`);
@@ -372,7 +384,7 @@ export default function TranscriptAnalyzer() {
       </div>
 
       {/* ── Single URL input ── */}
-      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 mb-6">
+      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 mb-3">
         <form onSubmit={handleSubmit} className="flex gap-3">
           <div className="relative flex-1">
             <Link2 size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-300 pointer-events-none"/>
@@ -403,6 +415,52 @@ export default function TranscriptAnalyzer() {
             <span key={t} className="text-[10px] bg-slate-100 text-slate-400 px-2 py-0.5 rounded font-medium">{t}</span>
           ))}
         </div>
+      </div>
+
+      {/* ── Prompt editor ── */}
+      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm mb-6 overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setPromptOpen(o => !o)}
+          className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-slate-50 transition-colors">
+          <div className="flex items-center gap-2">
+            <SlidersHorizontal size={14} className="text-violet-400"/>
+            <span className="text-sm font-medium text-slate-700">Analysis Prompt</span>
+            {isModified && (
+              <span className="text-[10px] font-semibold bg-violet-100 text-violet-600 px-2 py-0.5 rounded-full">
+                Custom
+              </span>
+            )}
+          </div>
+          {promptOpen ? <ChevronUp size={14} className="text-slate-400"/> : <ChevronDown size={14} className="text-slate-400"/>}
+        </button>
+
+        {promptOpen && (
+          <div className="border-t border-slate-100 p-4">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[11px] text-slate-400">
+                Edit the system prompt sent to Claude. Changes apply to the next analysis.
+              </p>
+              {isModified && (
+                <button
+                  type="button"
+                  onClick={() => setCustomPrompt(defaultPrompt)}
+                  className="flex items-center gap-1 text-[11px] text-violet-500 hover:text-violet-700 font-medium">
+                  <RotateCcw size={11}/> Reset to default
+                </button>
+              )}
+            </div>
+            <textarea
+              value={customPrompt}
+              onChange={e => setCustomPrompt(e.target.value)}
+              rows={14}
+              className="w-full text-[12px] font-mono text-slate-700 bg-slate-50 border border-slate-200
+                rounded-xl p-3 resize-y focus:outline-none focus:ring-2 focus:ring-violet-500/30
+                focus:border-violet-400 leading-relaxed transition-all"
+              spellCheck={false}
+            />
+          </div>
+        )}
       </div>
 
       {/* Error */}

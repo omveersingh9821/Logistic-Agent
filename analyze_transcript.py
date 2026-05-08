@@ -555,7 +555,7 @@ def clean_and_translate_transcript(raw_text: str) -> str:
     return resp.content[0].text.strip()
 
 
-def call_claude(transcript_text: str) -> tuple:
+def call_claude(transcript_text: str, system_prompt: str = None) -> tuple:
     client = anthropic.Anthropic()
     truncated = transcript_text[:MAX_CHARS]
     user_msg = (
@@ -571,7 +571,7 @@ def call_claude(transcript_text: str) -> tuple:
             resp = client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=8192,
-                system=TRANSCRIPT_SYSTEM_PROMPT,
+                system=system_prompt or TRANSCRIPT_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_msg}],
             )
 
@@ -617,7 +617,7 @@ def call_claude(transcript_text: str) -> tuple:
 # MAIN PIPELINE
 # ──────────────────────────────────────────────────────────────────────────────
 
-def analyze_transcript(url: str) -> TranscriptResult:
+def analyze_transcript(url: str, custom_prompt: str = None) -> TranscriptResult:
     result = TranscriptResult(url=url, timestamp=datetime.now(timezone.utc).isoformat())
 
     # 1. Download
@@ -669,7 +669,7 @@ def analyze_transcript(url: str) -> TranscriptResult:
         log.warning(f"Transcript cleaning failed (continuing with raw): {e}")
         result.cleaned_transcript = text
 
-    llm, usage = call_claude(text)
+    llm, usage = call_claude(text, system_prompt=custom_prompt)
     result.token_usage = usage
 
     if not llm:
