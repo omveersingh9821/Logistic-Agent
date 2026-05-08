@@ -1,4 +1,4 @@
-import { Video, MessageSquare, ChevronRight, X } from "lucide-react";
+import { Video, MessageSquare, ImageIcon, ChevronRight, X } from "lucide-react";
 
 const NAV_ITEMS = [
   {
@@ -10,6 +10,11 @@ const NAV_ITEMS = [
     id: "transcript-analyzer",
     label: "Transcript Analyzer",
     icon: MessageSquare,
+  },
+  {
+    id: "image-analyzer",
+    label: "Image Analyzer",
+    icon: ImageIcon,
   },
 ];
 

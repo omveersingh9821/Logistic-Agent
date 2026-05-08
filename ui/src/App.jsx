@@ -3,10 +3,12 @@ import { Menu } from "lucide-react";
 import Sidebar from "./components/Sidebar";
 import VideoAnalyzer from "./pages/VideoAnalyzer";
 import TranscriptAnalyzer from "./pages/TranscriptAnalyzer";
+import ImageAnalyzer from "./pages/ImageAnalyzer";
 
 const PAGES = {
   "video-analyzer": <VideoAnalyzer />,
   "transcript-analyzer": <TranscriptAnalyzer />,
+  "image-analyzer": <ImageAnalyzer />,
 };
 
 export default function App() {

@@ -10,9 +10,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dataclasses import asdict
 import logging
+import base64
+import urllib.request
+import anthropic
 
 from analyize_videos import ClaimInput, analyze_claim
 from analyze_transcript import analyze_transcript, TranscriptResult, TRANSCRIPT_SYSTEM_PROMPT
+
+DEFAULT_IMAGE_PROMPT = """You are a logistics and e-commerce visual analyst. Analyze this image carefully and provide:
+
+1. **What's shown** — describe the image contents clearly
+2. **Package / product condition** — intact, damaged, sealed, open, tampered?
+3. **Visible text / labels** — any order ID, AWB, barcode, address, or brand visible
+4. **Delivery or claims relevance** — any evidence useful for NDR validation, damage claims, or proof of delivery
+5. **Overall assessment** — is this image consistent with a legitimate delivery attempt?
+
+Be specific and factual. Flag any anomalies."""
 
 log = logging.getLogger("logiscan.api")
 
@@ -32,6 +45,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class ImageRequest(BaseModel):
+    url: str
+    custom_prompt: str = ""
 
 
 class AnalyzeRequest(BaseModel):
@@ -54,6 +72,56 @@ def health():
 @app.get("/api/default-prompt")
 def get_default_prompt():
     return {"prompt": TRANSCRIPT_SYSTEM_PROMPT}
+
+
+@app.get("/api/default-image-prompt")
+def get_default_image_prompt():
+    return {"prompt": DEFAULT_IMAGE_PROMPT}
+
+
+@app.post("/api/analyze-image")
+def analyze_image_endpoint(req: ImageRequest):
+    url = req.url.strip()
+    if not url:
+        raise HTTPException(status_code=422, detail="url is required")
+    prompt = req.custom_prompt.strip() or DEFAULT_IMAGE_PROMPT
+    try:
+        request = urllib.request.Request(url, headers={"User-Agent": "LogiScan/1.0"})
+        with urllib.request.urlopen(request, timeout=30) as resp:
+            content_type = resp.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
+            image_bytes = resp.read()
+
+        media_type = {
+            "image/jpeg": "image/jpeg", "image/jpg": "image/jpeg",
+            "image/png": "image/png", "image/gif": "image/gif",
+            "image/webp": "image/webp",
+        }.get(content_type, "image/jpeg")
+
+        image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
+
+        client = anthropic.Anthropic()
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=4096,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_b64}},
+                    {"type": "text", "text": prompt},
+                ],
+            }],
+        )
+
+        result_text = response.content[0].text
+        usage = {
+            "input_tokens": response.usage.input_tokens,
+            "output_tokens": response.usage.output_tokens,
+            "total_tokens": response.usage.input_tokens + response.usage.output_tokens,
+        }
+        return {"result": result_text, "image_url": url, "token_usage": usage}
+    except Exception as e:
+        log.exception("analyze_image failed")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/analyze-transcript")
