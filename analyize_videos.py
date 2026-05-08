@@ -41,7 +41,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("claims_analyzer.log", mode="a"),
+        logging.FileHandler("/tmp/claims_analyzer.log", mode="a"),
     ],
 )
 log = logging.getLogger("claims_analyzer")
