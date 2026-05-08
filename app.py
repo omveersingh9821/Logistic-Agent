@@ -1,6 +1,6 @@
 """
 LogiScan API — FastAPI wrapper around analyze_claim()
-Run: uvicorn api:app --reload --port 8000
+Run: uvicorn app:app --reload --port 8000
 """
 from dotenv import load_dotenv
 load_dotenv()

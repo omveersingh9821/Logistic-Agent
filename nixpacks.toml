@@ -2,4 +2,4 @@
 nixPkgs = ["ffmpeg", "tesseract"]
 
 [start]
-cmd = "uvicorn api:app --host 0.0.0.0 --port $PORT"
+cmd = "uvicorn app:app --host 0.0.0.0 --port $PORT"
