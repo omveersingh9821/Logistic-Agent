@@ -5,7 +5,7 @@ Run: uvicorn app:app --reload --port 8000
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dataclasses import asdict
@@ -15,7 +15,10 @@ import urllib.request
 import anthropic
 
 from analyize_videos import ClaimInput, analyze_claim
-from analyze_transcript import analyze_transcript, TranscriptResult, TRANSCRIPT_SYSTEM_PROMPT
+from analyze_transcript import (
+    analyze_transcript, analyze_transcript_from_bytes,
+    TranscriptResult, TRANSCRIPT_SYSTEM_PROMPT,
+)
 
 DEFAULT_IMAGE_PROMPT = """You are a logistics and e-commerce visual analyst. Analyze this image carefully and provide:
 
@@ -135,6 +138,35 @@ def analyze_transcript_endpoint(req: TranscriptRequest):
         return asdict(result)
     except Exception as e:
         log.exception("analyze_transcript failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+_MAX_UPLOAD_BYTES = 200 * 1024 * 1024  # 200 MB
+
+
+@app.post("/api/analyze-transcript-file")
+async def analyze_transcript_file_endpoint(
+    file: UploadFile = File(...),
+    custom_prompt: str = Form(default=""),
+):
+    filename = file.filename or "upload"
+    content_type = file.content_type or ""
+    raw_bytes = await file.read()
+
+    if not raw_bytes:
+        raise HTTPException(status_code=422, detail="Uploaded file is empty")
+    if len(raw_bytes) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large ({len(raw_bytes) // (1024*1024)} MB). Maximum is 200 MB.",
+        )
+
+    prompt = custom_prompt.strip() or None
+    try:
+        result = analyze_transcript_from_bytes(raw_bytes, filename, content_type, custom_prompt=prompt)
+        return asdict(result)
+    except Exception as e:
+        log.exception("analyze_transcript_file failed")
         raise HTTPException(status_code=500, detail=str(e))
 
 

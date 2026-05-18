@@ -347,20 +347,33 @@ _AUDIO_MIME = {
     "audio/mpeg", "audio/mp3", "audio/wav", "audio/ogg", "audio/webm",
     "audio/mp4", "audio/m4a", "audio/x-m4a", "audio/aac", "audio/flac",
     "audio/x-wav", "audio/wave", "audio/3gpp", "audio/amr",
+    # video containers that carry audio
+    "video/mp4", "video/quicktime", "video/x-msvideo", "video/x-matroska",
+    "video/mpeg", "video/x-ms-wmv", "video/webm",
 }
-_AUDIO_EXT = {".mp3", ".wav", ".ogg", ".webm", ".m4a", ".aac", ".flac",
-              ".wma", ".3gp", ".amr", ".opus"}
+_AUDIO_EXT = {
+    ".mp3", ".wav", ".ogg", ".webm", ".m4a", ".aac", ".flac",
+    ".wma", ".3gp", ".amr", ".opus",
+    # video containers
+    ".mp4", ".mov", ".avi", ".mkv", ".mpeg", ".mpg",
+}
+
+# Formats OpenAI Whisper API accepts without pre-conversion
+_WHISPER_NATIVE_EXT = frozenset({
+    ".mp3", ".wav", ".ogg", ".webm", ".m4a", ".flac",
+    ".mp4", ".mpeg", ".mpg", ".mpga", ".oga",
+})
 
 
 def is_audio(url: str, content_type: str, raw_bytes: bytes) -> bool:
-    """Return True if the content is an audio file."""
+    """Return True if the content is audio or video (needs Whisper transcription)."""
     mime = content_type.split(";")[0].strip()
     if mime in _AUDIO_MIME:
         return True
     ext = os.path.splitext(urlparse(url).path)[1].lower()
     if ext in _AUDIO_EXT:
         return True
-    # Magic bytes: ID3 tag (MP3), RIFF (WAV), OggS, fLaC
+    # Magic bytes: ID3 (MP3), RIFF (WAV), OggS, fLaC, MP4/MOV ftyp box
     if raw_bytes[:3] == b"ID3":
         return True
     if len(raw_bytes) >= 2 and raw_bytes[0] == 0xFF and raw_bytes[1] in (0xFB, 0xFA, 0xF3, 0xF2, 0xE3):
@@ -371,6 +384,8 @@ def is_audio(url: str, content_type: str, raw_bytes: bytes) -> bool:
         return True
     if raw_bytes[:4] == b"fLaC":
         return True
+    if len(raw_bytes) >= 8 and raw_bytes[4:8] == b"ftyp":
+        return True  # MP4/MOV/M4A ISO base media
     return False
 
 
@@ -405,24 +420,21 @@ def _extract_left_channel(raw_path: str) -> str:
     return out
 
 
-def transcribe_audio(url: str, audio_bytes: bytes) -> str:
+def transcribe_audio(source: str, audio_bytes: bytes) -> str:
     """
-    Transcribe audio using OpenAI Whisper API (whisper-1).
-      1. Send raw audio + language=hi + temperature=0
-      2. If Whisper loops/hallucinates, retry with left channel only
+    Transcribe audio/video using OpenAI Whisper API (whisper-1).
+    Formats not natively supported by Whisper (avi, mov, mkv, aac, amr, …)
+    are extracted/converted to 16 kHz mono WAV via FFmpeg first.
+    source: original URL or filename — used for extension detection only.
     """
     import openai
+    import subprocess
 
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set in .env")
 
-    if len(audio_bytes) > _OPENAI_WHISPER_MAX_BYTES:
-        raise RuntimeError(
-            f"Audio file is {len(audio_bytes)//(1024*1024):.1f} MB — limit is 25 MB."
-        )
-
-    ext = os.path.splitext(urlparse(url).path)[1].lower() or ".mp3"
+    ext = os.path.splitext(urlparse(source).path)[1].lower()
     if ext not in _AUDIO_EXT:
         ext = ".mp3"
 
@@ -430,12 +442,40 @@ def transcribe_audio(url: str, audio_bytes: bytes) -> str:
         f.write(audio_bytes)
         raw_path = f.name
 
+    converted_path = None
     left_path = None
-    try:
-        client = openai.OpenAI(api_key=api_key)
 
-        log.info(f"Whisper: raw {ext}, language=hi, {len(audio_bytes)//1024} KB")
-        with open(raw_path, "rb") as f:
+    try:
+        whisper_path = raw_path
+        whisper_ext = ext
+
+        # Convert to 16 kHz mono WAV when Whisper won't accept the format natively
+        if ext not in _WHISPER_NATIVE_EXT:
+            log.info(f"Converting {ext} → WAV via FFmpeg for Whisper")
+            converted_path = raw_path + "_converted.wav"
+            proc = subprocess.run(
+                ["ffmpeg", "-y", "-i", raw_path,
+                 "-vn", "-ar", "16000", "-ac", "1", converted_path],
+                capture_output=True, timeout=300,
+            )
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"FFmpeg conversion failed: {proc.stderr.decode()[:500]}"
+                )
+            whisper_path = converted_path
+            whisper_ext = ".wav"
+
+        whisper_size = os.path.getsize(whisper_path)
+        if whisper_size > _OPENAI_WHISPER_MAX_BYTES:
+            raise RuntimeError(
+                f"Audio is {whisper_size // (1024*1024):.1f} MB after conversion — "
+                "limit is 25 MB. Split the file and retry."
+            )
+
+        client = openai.OpenAI(api_key=api_key)
+        log.info(f"Whisper: {whisper_ext}, language=hi, {whisper_size // 1024} KB")
+
+        with open(whisper_path, "rb") as f:
             result = client.audio.transcriptions.create(
                 model="whisper-1", file=f,
                 response_format="text", language="hi",
@@ -445,7 +485,7 @@ def transcribe_audio(url: str, audio_bytes: bytes) -> str:
 
         if _is_looping(text):
             log.warning("Loop detected — retrying with left channel only")
-            left_path = _extract_left_channel(raw_path)
+            left_path = _extract_left_channel(whisper_path)
             with open(left_path, "rb") as f:
                 result2 = client.audio.transcriptions.create(
                     model="whisper-1", file=f,
@@ -461,9 +501,9 @@ def transcribe_audio(url: str, audio_bytes: bytes) -> str:
         return text
 
     finally:
-        os.unlink(raw_path)
-        if left_path and os.path.exists(left_path):
-            os.unlink(left_path)
+        for path in (raw_path, converted_path, left_path):
+            if path and os.path.exists(path):
+                os.unlink(path)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -617,22 +657,20 @@ def call_claude(transcript_text: str, system_prompt: str = None) -> tuple:
 # MAIN PIPELINE
 # ──────────────────────────────────────────────────────────────────────────────
 
-def analyze_transcript(url: str, custom_prompt: str = None) -> TranscriptResult:
-    result = TranscriptResult(url=url, timestamp=datetime.now(timezone.utc).isoformat())
+def _run_pipeline(
+    result: TranscriptResult,
+    raw_bytes: bytes,
+    source_id: str,
+    content_type: str,
+    custom_prompt: str = None,
+) -> TranscriptResult:
+    """Core pipeline shared by URL and direct-upload paths."""
 
-    # 1. Download
-    try:
-        raw_bytes, content_type = download_url(url)
-        log.info(f"Downloaded {len(raw_bytes)} bytes, content-type: {content_type}")
-    except Exception as e:
-        result.processing_errors.append(f"Download failed: {e}")
-        return result
-
-    # 2. Audio → transcribe first; text → parse directly
-    if is_audio(url, content_type, raw_bytes):
-        log.info("Audio file detected — routing to OpenAI Whisper API")
+    # 1. Audio/video → Whisper; text → parse directly
+    if is_audio(source_id, content_type, raw_bytes):
+        log.info("Audio/video file detected — routing to OpenAI Whisper API")
         try:
-            text = transcribe_audio(url, raw_bytes)
+            text = transcribe_audio(source_id, raw_bytes)
             result.audio_transcribed = True
             result.raw_transcript = text
             result.transcript_length_chars = len(text)
@@ -657,18 +695,18 @@ def analyze_transcript(url: str, custom_prompt: str = None) -> TranscriptResult:
         )
         return result
 
-    # 3. Clean + translate via Claude Haiku (fixes Whisper errors, adds speaker labels, English translation)
+    # 2. Clean + translate via Claude Haiku
     try:
         log.info("Cleaning and translating transcript via Claude Haiku…")
         cleaned = clean_and_translate_transcript(text)
         result.cleaned_transcript = cleaned
         log.info(f"Cleaned transcript: {len(cleaned)} chars | preview: {cleaned[:120]}")
-        # Use the cleaned+translated version for NDR analysis — much more accurate
         text = cleaned
     except Exception as e:
         log.warning(f"Transcript cleaning failed (continuing with raw): {e}")
         result.cleaned_transcript = text
 
+    # 3. NDR analysis via Claude
     llm, usage = call_claude(text, system_prompt=custom_prompt)
     result.token_usage = usage
 
@@ -678,11 +716,9 @@ def analyze_transcript(url: str, custom_prompt: str = None) -> TranscriptResult:
 
     result.llm_raw_response = llm
 
-    # Point 1
     result.call_initiator = llm.get("call_initiator", "unknown")
     result.call_direction = llm.get("call_direction", "unknown")
 
-    # Point 2
     result.customer_wants_order = llm.get("customer_wants_order")
     result.delivery_attempted = llm.get("delivery_attempted")
     result.delivery_agent_called_customer = llm.get("delivery_agent_called_customer")
@@ -690,42 +726,34 @@ def analyze_transcript(url: str, custom_prompt: str = None) -> TranscriptResult:
     result.no_call_no_attempt = bool(llm.get("no_call_no_attempt", False))
     result.call_count_by_agent = llm.get("call_count_by_agent")
 
-    # Point 3
     result.ndr_reason = llm.get("ndr_reason", "UNKNOWN")
     result.ndr_correctly_marked = llm.get("ndr_correctly_marked")
     result.fake_ndr_suspected = bool(llm.get("fake_ndr_suspected", False))
     result.ndr_mark_mismatch_reason = llm.get("ndr_mark_mismatch_reason")
 
-    # Point 4
     result.product_mentioned = llm.get("product_mentioned")
     result.order_id_mentioned = llm.get("order_id_mentioned")
     result.cod_amount_mentioned = llm.get("cod_amount_mentioned")
     result.product_urgency = llm.get("product_urgency")
 
-    # Intent
     result.customer_intent = llm.get("customer_intent", "UNCLEAR")
     result.complaint_nature = llm.get("complaint_nature", "")
 
-    # Scenarios
     result.ndr_followup_confirmed_want = llm.get("ndr_followup_confirmed_want")
     result.repeat_ndr = bool(llm.get("repeat_ndr", False))
     result.rto_already_initiated = bool(llm.get("rto_already_initiated", False))
 
-    # Resolution
     result.resolution_offered = llm.get("resolution_offered")
     result.resolution_requested = llm.get("resolution_requested")
     result.recommended_action = llm.get("recommended_action", "NO_ACTION")
 
-    # Risk
     result.escalation_needed = bool(llm.get("escalation_needed", False))
     result.escalation_reason = llm.get("escalation_reason")
     result.fraud_signals = llm.get("fraud_signals", [])
     result.promises_made = llm.get("promises_made", [])
 
-    # Evidence
     result.key_quotes = llm.get("key_quotes", {})
 
-    # Meta
     result.confidence_score = float(llm.get("confidence_score", 0.0))
     result.summary = llm.get("summary", "")
     result.language_detected = llm.get("language_detected", "unknown")
@@ -733,3 +761,25 @@ def analyze_transcript(url: str, custom_prompt: str = None) -> TranscriptResult:
     result.call_duration_mentioned = llm.get("call_duration_mentioned")
 
     return result
+
+
+def analyze_transcript(url: str, custom_prompt: str = None) -> TranscriptResult:
+    result = TranscriptResult(url=url, timestamp=datetime.now(timezone.utc).isoformat())
+    try:
+        raw_bytes, content_type = download_url(url)
+        log.info(f"Downloaded {len(raw_bytes)} bytes, content-type: {content_type}")
+    except Exception as e:
+        result.processing_errors.append(f"Download failed: {e}")
+        return result
+    return _run_pipeline(result, raw_bytes, url, content_type, custom_prompt)
+
+
+def analyze_transcript_from_bytes(
+    raw_bytes: bytes,
+    filename: str,
+    content_type: str = "",
+    custom_prompt: str = None,
+) -> TranscriptResult:
+    """Analyze a file supplied as raw bytes (direct upload path)."""
+    result = TranscriptResult(url=filename, timestamp=datetime.now(timezone.utc).isoformat())
+    return _run_pipeline(result, raw_bytes, filename, content_type, custom_prompt)

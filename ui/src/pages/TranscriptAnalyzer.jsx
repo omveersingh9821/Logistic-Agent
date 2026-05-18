@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   MessageSquare, Loader2, ShieldAlert, ChevronDown, ChevronUp,
   Info, AlertTriangle, CheckCircle2, XCircle, Phone, Package,
   Zap, Link2, AlertCircle, User, PhoneOff,
   ArrowRight, Flag, Clock, Mic, SlidersHorizontal, RotateCcw,
+  Upload, FileAudio, X,
 } from "lucide-react";
 
 const API = import.meta.env.VITE_API_URL || "";
@@ -326,14 +327,21 @@ function PointsGrid({ r }) {
 
 // ─── main page ────────────────────────────────────────────────────────────────
 
+const ACCEPTED_FORMATS = ".mp4,.mov,.avi,.mkv,.mpeg,.mpg,.mp3,.wav,.aac,.m4a,.amr,.ogg";
+const FORMAT_CHIPS = ["MP4","MOV","AVI","MKV","MPEG","MP3","WAV","AAC","M4A","AMR","OGG"];
+
 export default function TranscriptAnalyzer() {
+  const [inputMode, setInputMode] = useState("url"); // "url" | "file"
   const [url, setUrl] = useState("");
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [dragOver, setDragOver] = useState(false);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [promptOpen, setPromptOpen] = useState(false);
   const [defaultPrompt, setDefaultPrompt] = useState("");
   const [customPrompt, setCustomPrompt] = useState("");
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     fetch(`${API}/api/default-prompt`)
@@ -344,17 +352,34 @@ export default function TranscriptAnalyzer() {
 
   const isModified = customPrompt.trim() !== defaultPrompt.trim();
 
+  function handleFileDrop(e) {
+    e.preventDefault();
+    setDragOver(false);
+    const f = e.dataTransfer.files?.[0];
+    if (f) setSelectedFile(f);
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
-    const trimmed = url.trim();
-    if (!trimmed) return;
     setLoading(true); setResult(null); setError(null);
+
     try {
-      const res = await fetch(`${API}/api/analyze-transcript`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: trimmed, custom_prompt: customPrompt }),
-      });
+      let res;
+      if (inputMode === "file") {
+        if (!selectedFile) { setError("Please select a file."); setLoading(false); return; }
+        const form = new FormData();
+        form.append("file", selectedFile);
+        form.append("custom_prompt", customPrompt);
+        res = await fetch(`${API}/api/analyze-transcript-file`, { method: "POST", body: form });
+      } else {
+        const trimmed = url.trim();
+        if (!trimmed) { setError("Please enter a URL."); setLoading(false); return; }
+        res = await fetch(`${API}/api/analyze-transcript`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: trimmed, custom_prompt: customPrompt }),
+        });
+      }
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail ?? `Server error ${res.status}`);
       setResult(data);
@@ -379,42 +404,119 @@ export default function TranscriptAnalyzer() {
           <h1 className="text-xl font-semibold text-slate-800">NDR Transcript Analyzer</h1>
         </div>
         <p className="text-sm text-slate-500 ml-9">
-          Paste any URL — MP3 audio, S3, Footwork, or plain text. Audio is transcribed locally via Whisper, then analyzed by Claude.
+          Upload a file or paste a URL. Audio &amp; video are transcribed via Whisper, then analyzed by Claude.
         </p>
       </div>
 
-      {/* ── Single URL input ── */}
+      {/* ── Input card ── */}
       <div className="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 mb-3">
-        <form onSubmit={handleSubmit} className="flex gap-3">
-          <div className="relative flex-1">
-            <Link2 size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-300 pointer-events-none"/>
-            <input
-              type="text"
-              value={url}
-              onChange={e => setUrl(e.target.value)}
-              placeholder="https://s3.amazonaws.com/footwork/…  or any transcript URL"
-              className="w-full pl-10 pr-4 py-3 text-sm border border-slate-200 rounded-xl bg-slate-50
-                focus:outline-none focus:ring-2 focus:ring-violet-500/30 focus:border-violet-400
-                placeholder:text-slate-300 font-mono transition-all"
-              required
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={loading || !url.trim()}
-            className="shrink-0 inline-flex items-center gap-2 px-5 py-3 bg-violet-600 hover:bg-violet-700
-              disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed
-              text-white text-sm font-semibold rounded-xl transition-all shadow-sm shadow-violet-500/30">
-            {loading
-              ? <><Loader2 size={15} className="animate-spin"/>Analyzing…</>
-              : <><ArrowRight size={15}/>Analyze</>}
-          </button>
-        </form>
-        <div className="mt-2.5 flex flex-wrap gap-1.5">
-          {["MP3 / WAV audio","Footwork S3","AWS presigned",".txt / .json","Hindi","Hinglish","English"].map(t => (
-            <span key={t} className="text-[10px] bg-slate-100 text-slate-400 px-2 py-0.5 rounded font-medium">{t}</span>
+        {/* Mode toggle */}
+        <div className="flex items-center gap-1 mb-4 bg-slate-100 rounded-xl p-1 w-fit">
+          {[["url", <Link2 size={13}/>, "Paste URL"], ["file", <Upload size={13}/>, "Upload File"]].map(([mode, icon, label]) => (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => { setInputMode(mode); setError(null); }}
+              className={cn(
+                "flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-medium transition-colors",
+                inputMode === mode
+                  ? "bg-white text-slate-800 shadow-sm"
+                  : "text-slate-500 hover:text-slate-700"
+              )}
+            >
+              {icon}{label}
+            </button>
           ))}
         </div>
+
+        <form onSubmit={handleSubmit}>
+          {inputMode === "url" ? (
+            <div className="flex gap-3">
+              <div className="relative flex-1">
+                <Link2 size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-300 pointer-events-none"/>
+                <input
+                  type="text"
+                  value={url}
+                  onChange={e => setUrl(e.target.value)}
+                  placeholder="https://s3.amazonaws.com/…  or any transcript URL"
+                  className="w-full pl-10 pr-4 py-3 text-sm border border-slate-200 rounded-xl bg-slate-50
+                    focus:outline-none focus:ring-2 focus:ring-violet-500/30 focus:border-violet-400
+                    placeholder:text-slate-300 font-mono transition-all"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={loading || !url.trim()}
+                className="shrink-0 inline-flex items-center gap-2 px-5 py-3 bg-violet-600 hover:bg-violet-700
+                  disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed
+                  text-white text-sm font-semibold rounded-xl transition-all shadow-sm shadow-violet-500/30">
+                {loading ? <><Loader2 size={15} className="animate-spin"/>Analyzing…</> : <><ArrowRight size={15}/>Analyze</>}
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {/* Drop zone */}
+              <div
+                className={cn(
+                  "border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors select-none",
+                  dragOver ? "border-violet-400 bg-violet-50"
+                    : selectedFile ? "border-emerald-300 bg-emerald-50"
+                    : "border-slate-200 hover:border-violet-300 bg-slate-50"
+                )}
+                onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={handleFileDrop}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {selectedFile ? (
+                  <div className="flex items-center justify-center gap-3">
+                    <FileAudio size={20} className="text-emerald-500 shrink-0"/>
+                    <div className="text-left min-w-0">
+                      <p className="text-sm font-semibold text-emerald-800 truncate">{selectedFile.name}</p>
+                      <p className="text-xs text-emerald-600">{(selectedFile.size / (1024 * 1024)).toFixed(1)} MB</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={e => { e.stopPropagation(); setSelectedFile(null); }}
+                      className="ml-2 text-slate-400 hover:text-red-500 transition-colors"
+                    >
+                      <X size={16}/>
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <Upload size={24} className="mx-auto text-slate-300 mb-2"/>
+                    <p className="text-sm font-medium text-slate-500">Drag &amp; drop or click to select a file</p>
+                    <p className="text-xs text-slate-400 mt-1">MP4 · MOV · AVI · MKV · MP3 · WAV · AAC · M4A · AMR · OGG · MPEG</p>
+                  </>
+                )}
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept={ACCEPTED_FORMATS}
+                onChange={e => { if (e.target.files?.[0]) setSelectedFile(e.target.files[0]); }}
+                className="hidden"
+              />
+              <button
+                type="submit"
+                disabled={loading || !selectedFile}
+                className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 bg-violet-600 hover:bg-violet-700
+                  disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed
+                  text-white text-sm font-semibold rounded-xl transition-all shadow-sm shadow-violet-500/30">
+                {loading ? <><Loader2 size={15} className="animate-spin"/>Transcribing &amp; Analyzing…</> : <><ArrowRight size={15}/>Analyze</>}
+              </button>
+            </div>
+          )}
+        </form>
+
+        {inputMode === "url" && (
+          <div className="mt-2.5 flex flex-wrap gap-1.5">
+            {["MP3 / WAV / AAC","MP4 / MOV / AVI","Footwork S3","AWS presigned",".txt / .json","Hindi","Hinglish"].map(t => (
+              <span key={t} className="text-[10px] bg-slate-100 text-slate-400 px-2 py-0.5 rounded font-medium">{t}</span>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* ── Prompt editor ── */}
