@@ -17,6 +17,9 @@ from datetime import datetime, timezone
 from typing import Optional, List
 from urllib.parse import urlparse
 
+# OpenAI (audio transcription + Hinglish translation) is routed through the LiteLLM proxy.
+LITELLM_BASE_URL = os.environ.get("LITELLM_BASE_URL", "https://litellm.blitzshopdeck.in/").strip()
+
 log = logging.getLogger("transcript_analyzer")
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -466,9 +469,8 @@ def transcribe_audio(source: str, audio_bytes: bytes, content_type: str = None) 
         ext = ".mp3"
     filename = f"audio{ext}"
 
-    base_url = os.environ.get("OPENAI_BASE_URL", "https://litellm.blitzshopdeck.in/").strip()
-    client = openai.OpenAI(api_key=api_key, base_url=base_url)
-    log.info(f"gpt-4o-transcribe @ {base_url}: {filename}, ct={content_type or '-'}, {len(audio_bytes) // 1024} KB")
+    client = openai.OpenAI(api_key=api_key, base_url=LITELLM_BASE_URL)
+    log.info(f"gpt-4o-transcribe @ {LITELLM_BASE_URL}: {filename}, ct={content_type or '-'}, {len(audio_bytes) // 1024} KB")
 
     audio_file = (filename, audio_bytes, content_type) if content_type else (filename, audio_bytes)
 
