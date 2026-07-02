@@ -587,7 +587,7 @@ def clean_and_translate_transcript(raw_text: str) -> str:
     and produce an English translation alongside the original.
     This runs before the main NDR analysis to dramatically improve accuracy.
     """
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(base_url=os.environ.get("ANTHROPIC_BASE_URL", "https://litellm.blitzshopdeck.in/"))
     resp = client.messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=4096,
@@ -613,7 +613,7 @@ def clean_and_translate_transcript(raw_text: str) -> str:
 
 
 def call_claude(transcript_text: str, system_prompt: str = None) -> tuple:
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(base_url=os.environ.get("ANTHROPIC_BASE_URL", "https://litellm.blitzshopdeck.in/"))
     truncated = transcript_text[:MAX_CHARS]
     user_msg = (
         "Analyze this customer support call transcript according to your instructions.\n\n"

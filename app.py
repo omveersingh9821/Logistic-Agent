@@ -341,7 +341,7 @@ def analyze_image_endpoint(req: ImageRequest):
 
         image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
 
-        client = anthropic.Anthropic()
+        client = anthropic.Anthropic(base_url=os.environ.get("ANTHROPIC_BASE_URL", "https://litellm.blitzshopdeck.in/"))
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=4096,

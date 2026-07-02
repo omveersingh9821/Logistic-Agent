@@ -772,7 +772,7 @@ def build_llm_content(
 # ──────────────────────────────────────────────
 def call_claude(content: list) -> Optional[Dict]:
     """Call Claude API with retries and response validation."""
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(base_url=os.environ.get("ANTHROPIC_BASE_URL", "https://litellm.blitzshopdeck.in/"))
 
     for attempt in range(CFG.llm_retries):
         try:
