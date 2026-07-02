@@ -7,6 +7,7 @@ load_dotenv()
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dataclasses import asdict
 import logging
@@ -430,3 +431,17 @@ def analyze(req: AnalyzeRequest):
     except Exception as e:
         log.exception("analyze_claim failed")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# STATIC FRONTEND
+# Serve the built React SPA (ui/dist copied to ./static) at the site root.
+# Mounted LAST so all /api/* routes above take precedence. html=True serves
+# index.html for "/"; the app uses in-app (state-based) navigation, so no
+# additional SPA fallback is required.
+# ──────────────────────────────────────────────────────────────────────────────
+_STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+if os.path.isdir(_STATIC_DIR):
+    app.mount("/", StaticFiles(directory=_STATIC_DIR, html=True), name="static")
+else:
+    log.warning("static/ directory not found — frontend will not be served at '/'")
