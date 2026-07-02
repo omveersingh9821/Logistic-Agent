@@ -442,7 +442,7 @@ def _extract_left_channel(raw_path: str) -> str:
 
 def transcribe_audio(source: str, audio_bytes: bytes) -> str:
     """
-    Transcribe audio/video using OpenAI Whisper API (whisper-1).
+    Transcribe audio/video using OpenAI gpt-4o-transcribe.
     Formats not natively supported by Whisper (avi, mov, mkv, aac, amr, …)
     are extracted/converted to 16 kHz mono WAV via FFmpeg first.
     source: original URL or filename — used for extension detection only.
@@ -497,7 +497,7 @@ def transcribe_audio(source: str, audio_bytes: bytes) -> str:
 
         with open(whisper_path, "rb") as f:
             result = client.audio.transcriptions.create(
-                model="whisper-1", file=f,
+                model="gpt-4o-transcribe", file=f,
                 response_format="text", language="hi",
                 temperature=0, prompt=_WHISPER_PROMPT_HI,
             )
@@ -508,7 +508,7 @@ def transcribe_audio(source: str, audio_bytes: bytes) -> str:
             left_path = _extract_left_channel(whisper_path)
             with open(left_path, "rb") as f:
                 result2 = client.audio.transcriptions.create(
-                    model="whisper-1", file=f,
+                    model="gpt-4o-transcribe", file=f,
                     response_format="text", language="hi",
                     temperature=0, prompt=_WHISPER_PROMPT_HI,
                 )
