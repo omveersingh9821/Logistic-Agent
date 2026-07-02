@@ -440,90 +440,86 @@ def _extract_left_channel(raw_path: str) -> str:
     return out
 
 
-def transcribe_audio(source: str, audio_bytes: bytes) -> str:
+def transcribe_audio(source: str, audio_bytes: bytes, content_type: str = None) -> str:
     """
-    Transcribe audio/video using OpenAI gpt-4o-transcribe.
-    Formats not natively supported by Whisper (avi, mov, mkv, aac, amr, …)
-    are extracted/converted to 16 kHz mono WAV via FFmpeg first.
-    source: original URL or filename — used for extension detection only.
+    Transcribe audio/video using OpenAI gpt-4o-transcribe by sending the raw
+    bytes directly (no FFmpeg pre-processing). If the transcript comes back in
+    Devanagari script, translate it to natural spoken Hinglish via gpt-4o-mini;
+    Hinglish/English transcripts pass through unchanged.
+    source: original URL or filename — used only to derive a filename/extension.
     """
     import openai
-    import subprocess
 
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set in .env")
 
+    if len(audio_bytes) > _OPENAI_WHISPER_MAX_BYTES:
+        raise RuntimeError(
+            f"Audio is {len(audio_bytes) // (1024*1024)} MB — OpenAI's limit is 25 MB. "
+            "Please upload a shorter or more compressed clip."
+        )
+
+    # Give OpenAI a filename with a valid extension so it can infer the format.
     ext = os.path.splitext(urlparse(source).path)[1].lower()
     if ext not in _AUDIO_EXT:
         ext = ".mp3"
+    filename = f"audio{ext}"
 
-    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as f:
-        f.write(audio_bytes)
-        raw_path = f.name
+    client = openai.OpenAI(api_key=api_key)
+    log.info(f"gpt-4o-transcribe: {filename}, ct={content_type or '-'}, {len(audio_bytes) // 1024} KB")
 
-    converted_path = None
-    left_path = None
+    audio_file = (filename, audio_bytes, content_type) if content_type else (filename, audio_bytes)
 
     try:
-        whisper_path = raw_path
-        whisper_ext = ext
+        response = client.audio.transcriptions.create(
+            model="gpt-4o-transcribe",
+            file=audio_file,
+            response_format="text",
+        )
+    except openai.OpenAIError as e:
+        log.error(f"OpenAI audio API failed: {e}")
+        raise RuntimeError(f"OpenAI transcription API failed: {e}") from e
 
-        # Convert to 16 kHz mono WAV when Whisper won't accept the format natively
-        if ext not in _WHISPER_NATIVE_EXT:
-            log.info(f"Converting {ext} → WAV via FFmpeg for Whisper")
-            converted_path = raw_path + "_converted.wav"
-            proc = subprocess.run(
-                ["ffmpeg", "-y", "-i", raw_path,
-                 "-vn", "-ar", "16000", "-ac", "1", converted_path],
-                capture_output=True, timeout=300,
-            )
-            if proc.returncode != 0:
-                raise RuntimeError(
-                    f"FFmpeg conversion failed: {proc.stderr.decode()[:500]}"
-                )
-            whisper_path = converted_path
-            whisper_ext = ".wav"
+    transcription = response if isinstance(response, str) else getattr(response, "text", "")
+    if not transcription:
+        raise RuntimeError("Empty transcription response received from OpenAI")
 
-        whisper_size = os.path.getsize(whisper_path)
-        if whisper_size > _OPENAI_WHISPER_MAX_BYTES:
-            raise RuntimeError(
-                f"Audio is {whisper_size // (1024*1024):.1f} MB after conversion — "
-                "limit is 25 MB. Split the file and retry."
-            )
+    # Only translate if Devanagari (U+0900–U+097F) is present; else pass through.
+    if not any("ऀ" <= c <= "ॿ" for c in transcription):
+        log.info(f"Transcription complete: {len(transcription)} chars | preview: {transcription[:150]}")
+        return transcription
 
-        client = openai.OpenAI(api_key=api_key)
-        log.info(f"Whisper: {whisper_ext}, language=hi, {whisper_size // 1024} KB")
+    log.info("Devanagari detected — translating to Hinglish via gpt-4o-mini")
+    try:
+        translation_response = client.responses.create(
+            model="gpt-4o-mini",
+            input=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are transcribing an Indian customer service phone call. "
+                        "Convert the Hindi (Devanagari) text to natural spoken Hinglish — the way Indians actually speak in everyday conversations, mixing Hindi and English words naturally. "
+                        "Do NOT translate to formal English. Keep Hindi words like 'ji', 'aap', 'kal', 'theek hai', 'bhaiya', 'didi' as-is in Roman script. "
+                        "Preserve the exact conversational flow, filler words, and natural speech patterns. "
+                        "Return every single word — do not skip, summarize, or shorten anything."
+                    ),
+                },
+                {"role": "user", "content": transcription},
+            ],
+            max_output_tokens=20000,
+        )
+        translated = getattr(translation_response, "output_text", None)
+    except openai.OpenAIError as e:
+        log.warning(f"Hinglish translation failed — returning raw Devanagari transcript: {e}")
+        return transcription
 
-        with open(whisper_path, "rb") as f:
-            result = client.audio.transcriptions.create(
-                model="gpt-4o-transcribe", file=f,
-                response_format="text", language="hi",
-                temperature=0, prompt=_WHISPER_PROMPT_HI,
-            )
-        text = result if isinstance(result, str) else result.text
+    if not translated:
+        log.warning("Empty translation response — returning raw Devanagari transcript")
+        return transcription
 
-        if _is_looping(text):
-            log.warning("Loop detected — retrying with left channel only")
-            left_path = _extract_left_channel(whisper_path)
-            with open(left_path, "rb") as f:
-                result2 = client.audio.transcriptions.create(
-                    model="gpt-4o-transcribe", file=f,
-                    response_format="text", language="hi",
-                    temperature=0, prompt=_WHISPER_PROMPT_HI,
-                )
-            text2 = result2 if isinstance(result2, str) else result2.text
-            if not _is_looping(text2) and len(text2) > len(text):
-                text = text2
-                log.info("Left-channel retry succeeded")
-
-        log.info(f"Transcription complete: {len(text)} chars | preview: {text[:150]}")
-        return text
-
-    finally:
-        for path in (raw_path, converted_path, left_path):
-            if path and os.path.exists(path):
-                os.unlink(path)
+    log.info(f"Transcription+translation complete: {len(translated)} chars | preview: {translated[:150]}")
+    return translated
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -689,7 +685,7 @@ def _run_pipeline(
     if is_audio(source_id, content_type, raw_bytes):
         log.info("Audio/video file detected — routing to OpenAI Whisper API")
         try:
-            text = transcribe_audio(source_id, raw_bytes)
+            text = transcribe_audio(source_id, raw_bytes, content_type)
             result.audio_transcribed = True
             result.raw_transcript = text
             result.transcript_length_chars = len(text)

@@ -9,8 +9,8 @@ python-multipart>=0.0.9
 # Anthropic SDK (Claude API)
 anthropic>=0.39.0
 
-# OpenAI SDK — used for Whisper API audio transcription (whisper-1)
-openai>=1.0.0
+# OpenAI SDK — gpt-4o-transcribe (audio) + Responses API (gpt-4o-mini Hinglish translation)
+openai>=1.66.0
 
 # Env management
 python-dotenv>=1.0.0
